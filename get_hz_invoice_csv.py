@@ -3,15 +3,17 @@ from dotenv import load_dotenv
 import os
 import pyotp
 
-# Загрузка переменных из .env
+# Load environment variables from .env
 load_dotenv()
 
 USERNAME = os.getenv("USERNAME")
 PASSWORD = os.getenv("PASSWORD")
 TWOFA_SECRET = os.getenv("TWOFA_SECRET")
-COMPANY_NUMBER = "K0557577023"  # Укажите свой номер компании , взять можно из полседнего invoice
+COMPANY_NUMBER = os.getenv("COMPANY_NUMBER")  # Default company number, check your invoice
+USE_2FA = os.getenv("USE_2FA", "true").lower() == "true"  # Enable or disable 2FA based on environment variable
 
 def apply_stealth(page):
+    """Apply stealth mode to avoid detection as an automated script."""
     page.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', {
             get: () => false,
@@ -28,7 +30,7 @@ def apply_stealth(page):
     """)
 
 def extract_usage_link(page):
-    """Извлекает ссылку для использования CSV"""
+    """Extract the usage link for CSV download."""
     links = page.query_selector_all('a.btn.btn-detail')
     for link in links:
         href = link.get_attribute('href')
@@ -38,59 +40,60 @@ def extract_usage_link(page):
 
 def main():
     with sync_playwright() as p:
-        # Запуск браузера
+        # Launch the browser
         browser = p.chromium.launch(headless=True)
 
-        # Создание контекста и страницы
+        # Create browser context and page
         context = browser.new_context(user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         page = context.new_page()
         apply_stealth(page)
 
-        # Авторизация
+        # Log in to the account
         page.goto('https://accounts.hetzner.com/login')
-        page.type('input#_username', USERNAME) 
+        page.type('input#_username', USERNAME)
         page.type('input#_password', PASSWORD)
         page.click('input#submit-login')
         page.wait_for_load_state('load')
 
-        # Обработка 2FA
-        totp = pyotp.TOTP(TWOFA_SECRET)
-        otp = totp.now()
-        page.type("input#input-verify-code", otp)
-        page.click("input#btn-submit")
-        page.wait_for_load_state('load')
+        # Handle 2FA if enabled
+        if USE_2FA:
+            totp = pyotp.TOTP(TWOFA_SECRET)
+            otp = totp.now()
+            page.type("input#input-verify-code", otp)
+            page.click("input#btn-submit")
+            page.wait_for_load_state('load')
 
-        # Переход на страницу счетов
+        # Navigate to the invoices page
         page.goto('https://accounts.hetzner.com/invoice')
 
-        # Ожидание кнопок "Details"
+        # Wait for "Details" buttons to load
         page.wait_for_selector('a.btn.btn-detail')
 
-        # Извлечение ссылки
+        # Extract the usage link
         usage_link = extract_usage_link(page)
         if not usage_link:
-            print("Ссылка на usage.hetzner.com не найдена.")
+            print("Usage link on usage.hetzner.com not found.")
             return
 
-        print(f"Найдена ссылка на usage: {usage_link}")
+        print(f"Found usage link: {usage_link}")
 
-        # Формирование ссылки для загрузки CSV
+        # Generate the CSV download link
         csv_link = f"{usage_link}?csv&cn={COMPANY_NUMBER}"
-        print(f"Ссылка для загрузки CSV: {csv_link}")
+        print(f"CSV download link: {csv_link}")
 
-        # Скачивание CSV через page.request
+        # Download the CSV file using page.request
         response = page.request.get(csv_link)
         if response.status != 200:
-            print(f"Ошибка при скачивании CSV. Код: {response.status}")
+            print(f"Error downloading CSV. Status code: {response.status}")
             return
 
-        # Сохранение файла
-        file_path = "/tmp/invoice.csv"
+        # Save the downloaded file
+        file_path = "invoice.csv"
         with open(file_path, "wb") as f:
             f.write(response.body())
-        print(f"CSV файл загружен: {file_path}")
+        print(f"CSV file downloaded: {file_path}")
 
-        # Закрытие браузера
+        # Close the browser
         browser.close()
 
 if __name__ == "__main__":
